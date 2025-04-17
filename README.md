@@ -113,4 +113,5 @@ Movie & Series Tracker is a Next.js application designed to help you keep track 
 
 ## License
 
-[MIT](LICENSE)
+📄 Licencia: Uso privado y exclusivo. Ver archivo (LICENSE) para más detalles.
+
