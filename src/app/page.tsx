@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/hooks/use-toast';
-import { Trash, Star, Search, ArrowUpDown, Film, Tv, X, Loader2, PlusCircle } from "lucide-react"; // Added icons
+import { Trash, Star, Search, ArrowUpDown, Film, Tv, X, Loader2, PlusCircle } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -30,8 +30,8 @@ import { StarRating } from '@/components/ui/star-rating'; // Ensure this compone
 import {
   loadItemsAction,
   saveItemsAction,
-  updateItemsFromTmdbAction, // Renamed action
-  searchTmdbAction // Import search action
+  updateItemsFromTmdbAction,
+  searchTmdbAction
 } from '@/app/actions';
 
 // --- Interfaces ---
@@ -39,11 +39,12 @@ type ItemType = 'movie' | 'series';
 
 // Frontend state includes UI flags
 interface ItemInfo {
-  tmdbId: number; // Use TMDb ID as primary key
+  tmdbId: number;
   title: string;
   type: ItemType;
-  latestSeason: number | null; // Store as number
-  userSeason: string; // Keep as string for input
+  latestSeason: number | null;
+  userSeason: string;
+  userEpisode: string; // *** NUEVO CAMPO: Episodio actual del usuario ***
   rating: number;
   loadingUpdate?: boolean;
   errorUpdate?: string;
@@ -58,6 +59,7 @@ interface StoredItemInfo {
   type: ItemType;
   latestSeason: number | null;
   userSeason: string;
+  userEpisode: string; // *** NUEVO CAMPO ***
   rating: number;
   posterPath?: string | null;
   releaseYear?: string | null;
@@ -89,7 +91,7 @@ export default function Home() {
   const [isLoadingList, setIsLoadingList] = useState<boolean>(true);
   const [isUpdatingAll, setIsUpdatingAll] = useState<boolean>(false);
   const [searchTerm, setSearchTerm] = useState<string>('');
-  const [sortCriteria, setSortCriteria] = useState<string>('title-asc'); // Default sort: Title A-Z
+  const [sortCriteria, setSortCriteria] = useState<string>('title-asc');
   const { toast } = useToast();
 
   // State for TMDb Search Dialog
@@ -102,7 +104,6 @@ export default function Home() {
 
   // --- Sorting Options ---
    const sortOptions: SortOption[] = [
-        // { value: 'default', label: 'Por defecto' }, // Removed default, start with Title A-Z
         { value: 'title-asc', label: 'Título (A-Z)' },
         { value: 'title-desc', label: 'Título (Z-A)' },
         { value: 'rating-desc', label: 'Puntuación (Mayor a Menor)' },
@@ -118,6 +119,8 @@ export default function Home() {
       console.log("Loaded items:", storedList);
       setItemList(storedList.map(item => ({
           ...item,
+          // Ensure userEpisode is mapped correctly
+          userEpisode: item.userEpisode || '0', // Default to '0' if missing
           loadingUpdate: false,
           errorUpdate: undefined,
           posterPath: item.posterPath,
@@ -138,7 +141,7 @@ export default function Home() {
 
   useEffect(() => {
     loadItemList();
-  }, [loadItemList]); // Depend on loadItemList
+  }, [loadItemList]);
 
   // --- Data Saving Utility (Debounced) ---
   const debounce = <F extends (...args: any[]) => any>(func: F, waitFor: number) => {
@@ -154,18 +157,20 @@ export default function Home() {
   };
 
   const saveItemsToServer = useCallback(async (listToSave: ItemInfo[]) => {
-    const storedList: StoredItemInfo[] = listToSave.map(({ tmdbId, title, type, latestSeason, userSeason, rating, posterPath, releaseYear }) => ({
+    // Map frontend state to stored structure including userEpisode
+    const storedList: StoredItemInfo[] = listToSave.map(({ tmdbId, title, type, latestSeason, userSeason, userEpisode, rating, posterPath, releaseYear }) => ({
       tmdbId,
       title,
       type,
       latestSeason,
       userSeason,
+      userEpisode: type === 'series' ? userEpisode : '0', // *** GUARDAR userEpisode (o '0' para pelis) ***
       rating: rating ?? 0,
       posterPath,
       releaseYear,
     }));
-    // console.log("Calling saveItemsAction with:", storedList); // Less verbose logging
-    const result = await saveItemsAction(storedList); // Use renamed action
+    // console.log("Calling saveItemsAction with:", storedList);
+    const result = await saveItemsAction(storedList);
     if (!result.success) {
       console.error("Failed to save list to server.");
       toast({
@@ -175,11 +180,9 @@ export default function Home() {
       });
     } else {
       console.log("List saved successfully.");
-      // toast({ title: 'Lista Guardada', description: 'Tu lista ha sido guardada.' }); // Optional success toast
     }
   }, [toast]);
 
-  // Debounced save, increased delay slightly
   const debouncedSave = useCallback(debounce(saveItemsToServer, 1500), [saveItemsToServer]);
 
   // --- TMDb Search Logic ---
@@ -194,7 +197,6 @@ export default function Home() {
           if (error) {
               console.error("TMDb Search Error:", error);
               setTmdbSearchError(error);
-              // toast({ title: "Error de Búsqueda en TMDb", description: error, variant: "destructive" });
           } else {
               console.log("TMDb Search Results:", results);
               setTmdbSearchResults(results);
@@ -205,7 +207,6 @@ export default function Home() {
       } catch (e: any) {
           console.error("Unexpected search error:", e);
           setTmdbSearchError("Error inesperado durante la búsqueda.");
-          // toast({ title: "Error", description: "Error inesperado durante la búsqueda.", variant: "destructive" });
       } finally {
           setIsSearchingTmdb(false);
       }
@@ -219,7 +220,6 @@ export default function Home() {
               description: `"${selectedItem.title || selectedItem.name}" ya está en tu lista.`,
               variant: "warning",
           });
-          // Keep dialog open for another search or manual close
           return;
       }
 
@@ -232,8 +232,9 @@ export default function Home() {
           tmdbId: selectedItem.id,
           title: itemTitle,
           type: itemType,
-          latestSeason: null, // Fetched later by update action
+          latestSeason: null,
           userSeason: '0',
+          userEpisode: '0', // *** INICIALIZAR userEpisode ***
           rating: 0,
           posterPath: selectedItem.poster_path,
           releaseYear: releaseYear,
@@ -251,7 +252,6 @@ export default function Home() {
           description: `"${itemTitle}" añadido a tu lista.`,
       });
 
-      // Close dialog and clear search state
       setIsSearchDialogOpen(false);
       setTmdbSearchQuery('');
       setTmdbSearchResults([]);
@@ -262,14 +262,28 @@ export default function Home() {
   // --- Other CRUD Operations ---
   const updateUserSeason = (tmdbId: number, newUserSeason: string) => {
     const seasonNum = parseInt(newUserSeason, 10);
-    if ((isNaN(seasonNum) || seasonNum < 0) && newUserSeason !== '') return; // Allow empty string, prevent negative
+    if ((isNaN(seasonNum) || seasonNum < 0) && newUserSeason !== '') return;
 
     const updatedList = itemList.map((item) =>
-        item.tmdbId === tmdbId ? { ...item, userSeason: newUserSeason || '0' } : item // Default to '0' if empty
+        item.tmdbId === tmdbId ? { ...item, userSeason: newUserSeason || '0' } : item
     );
     setItemList(updatedList);
     debouncedSave(updatedList);
   };
+
+  // *** NUEVA FUNCIÓN para actualizar episodio ***
+  const updateUserEpisode = (tmdbId: number, newUserEpisode: string) => {
+    const episodeNum = parseInt(newUserEpisode, 10);
+    // Allow 0, handle empty string during typing, prevent negative
+    if ((isNaN(episodeNum) || episodeNum < 0) && newUserEpisode !== '') return;
+
+    const updatedList = itemList.map((item) =>
+        item.tmdbId === tmdbId ? { ...item, userEpisode: newUserEpisode || '0' } : item // Default to '0' if empty
+    );
+    setItemList(updatedList);
+    debouncedSave(updatedList);
+  };
+
 
    const updateRating = (tmdbId: number, newRating: number) => {
         const updatedList = itemList.map((item) =>
@@ -292,7 +306,7 @@ export default function Home() {
   };
 
   // --- Update Latest Seasons ---
-  const handleUpdateItems = async () => { // Renamed function
+  const handleUpdateItems = async () => {
     const itemsToUpdate = itemList.filter(item => item.type === 'series');
      if (itemsToUpdate.length === 0) {
        toast({ title: "Info", description: "No hay series en la lista para actualizar." });
@@ -305,18 +319,18 @@ export default function Home() {
     ));
 
     try {
-      const { updatedList: serverUpdatedList, errors } = await updateItemsFromTmdbAction(); // Use renamed action
-      console.log("Received from server after update:", serverUpdatedList); // Log received data
+      const { updatedList: serverUpdatedList, errors } = await updateItemsFromTmdbAction();
+      console.log("Received from server after update:", serverUpdatedList);
 
-      // *** CORRECTED STATE UPDATE ***
       // Update local state ONCE with the results from the server and handle errors
       setItemList(serverUpdatedList.map(serverItem => {
-          // Find if there's an error reported for this specific item
           const errorInfo = errors.find(e => e.title.includes(`ID ${serverItem.tmdbId}`) || e.title === serverItem.title);
           return {
-              ...serverItem, // Spread ALL fields from the server response (preserves posterPath, etc.)
-              loadingUpdate: false, // Reset loading flag
-              errorUpdate: errorInfo ? errorInfo.error : undefined, // Assign error if exists
+              ...serverItem, // Preserves ALL fields from the server response
+              // Ensure userEpisode is preserved from the server response as well
+              userEpisode: serverItem.userEpisode || '0',
+              loadingUpdate: false,
+              errorUpdate: errorInfo ? errorInfo.error : undefined,
           };
       }));
 
@@ -343,15 +357,14 @@ export default function Home() {
             description: `Ocurrió un error inesperado: ${error.message}`,
             variant: 'destructive',
         });
-       setItemList(prevList => prevList.map(item => ({ ...item, loadingUpdate: false }))); // Reset loading on general failure
+       setItemList(prevList => prevList.map(item => ({ ...item, loadingUpdate: false })));
     } finally {
       setIsUpdatingAll(false);
     }
   };
 
-
   // --- Filtering and Sorting Logic ---
-  const filteredAndSortedItemList = useMemo(() => { // Renamed variable
+  const filteredAndSortedItemList = useMemo(() => {
     let filteredList = itemList;
 
     if (searchTerm.trim() !== '') {
@@ -362,12 +375,11 @@ export default function Home() {
 
     const [key, order] = sortCriteria.split('-') as [SortKey | 'default', SortOrder | undefined];
 
-    // Default sort or invalid criteria defaults to Title Asc
     if (key === 'default' || !order || (key !== 'title' && key !== 'rating')) {
          return [...filteredList].sort((a, b) => a.title.localeCompare(b.title));
     }
 
-    return [...filteredList].sort((a, b) => { // Create a copy before sorting
+    return [...filteredList].sort((a, b) => {
       let comparison = 0;
       if (key === 'title') {
         comparison = a.title.localeCompare(b.title);
@@ -391,13 +403,8 @@ export default function Home() {
 
   // Helper to get TMDb image URL
   const getTmdbImageUrl = (filePath: string | null | undefined, size: string = "w342") => {
-      // Basic placeholder
       const placeholder = 'https://placehold.co/342x513/e2e8f0/718096?text=No+Imagen';
-      if (!filePath) {
-          // console.log("getTmdbImageUrl received null/undefined filePath"); // Log if path is missing
-          return placeholder;
-        }
-      // console.log(`Generating image URL for path: ${filePath}`); // Log the path being used
+      if (!filePath) return placeholder;
       return `https://image.tmdb.org/t/p/${size}${filePath}`;
   }
 
@@ -440,18 +447,15 @@ export default function Home() {
                             {/* Search Results Area */}
                             <ScrollArea className="h-[400px] border rounded-md">
                                 <div className="p-2 space-y-1">
-                                    {/* Loading State */}
                                     {isSearchingTmdb && (
                                         <div className="flex justify-center items-center h-full py-10">
                                             <Loader2 className="h-6 w-6 animate-spin text-primary" />
                                             <p className="ml-2 text-muted-foreground">Buscando...</p>
                                         </div>
                                     )}
-                                    {/* Error State */}
                                     {tmdbSearchError && !isSearchingTmdb && (
                                         <p className="text-center text-red-600 py-10 px-4">{tmdbSearchError}</p>
                                     )}
-                                    {/* Results List */}
                                     {!isSearchingTmdb && tmdbSearchResults.map((result) => {
                                         const title = result.title || result.name || 'Desconocido';
                                         const year = result.release_date?.substring(0, 4) || result.first_air_date?.substring(0, 4);
@@ -467,14 +471,14 @@ export default function Home() {
                                                  <img
                                                     src={getTmdbImageUrl(result.poster_path, "w92")}
                                                     alt={`Poster de ${title}`}
-                                                    className="h-20 w-[53px] rounded object-cover flex-shrink-0 bg-muted border" // Fixed width based on aspect ratio
+                                                    className="h-20 w-[53px] rounded object-cover flex-shrink-0 bg-muted border"
                                                     loading="lazy"
-                                                    onError={(e) => (e.currentTarget.src = 'https://placehold.co/53x80/e2e8f0/718096?text=N/A')} // Adjusted placeholder size
+                                                    onError={(e) => (e.currentTarget.src = 'https://placehold.co/53x80/e2e8f0/718096?text=N/A')}
                                                 />
                                                 <div className="flex-grow overflow-hidden pt-1">
                                                     <p className="font-semibold truncate text-sm">{title} {year ? `(${year})` : ''}</p>
                                                     <p className="text-xs text-muted-foreground">{typeText}</p>
-                                                    <p className="text-xs text-muted-foreground line-clamp-2 mt-1">{result.overview || 'Sin descripción.'}</p> {/* Limit overview lines */}
+                                                    <p className="text-xs text-muted-foreground line-clamp-2 mt-1">{result.overview || 'Sin descripción.'}</p>
                                                 </div>
                                                 {alreadyExists && <span className="text-xs text-muted-foreground ml-auto mr-2 flex-shrink-0">(Añadido)</span>}
                                             </div>
@@ -525,7 +529,7 @@ export default function Home() {
 
                  {/* Update Button */}
                 <Button
-                    onClick={handleUpdateItems} // Renamed handler
+                    onClick={handleUpdateItems}
                     disabled={isUpdatingAll || itemList.filter(i => i.type === 'series').length === 0}
                     className="w-full"
                     title={itemList.filter(i => i.type === 'series').length === 0 ? "Añade alguna serie primero" : "Buscar datos en TMDb (solo series)"}
@@ -538,7 +542,7 @@ export default function Home() {
 
 
         {/* --- Display Item List --- */}
-        <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5"> {/* More responsive grid */}
+        <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
           {filteredAndSortedItemList.length === 0 && !isLoadingList && (
               <p className="col-span-full text-center text-muted-foreground py-10">
                 {searchTerm ? `No se encontraron resultados para "${searchTerm}".` : 'Tu lista está vacía. Usa el botón "+" para añadir películas o series.'}
@@ -546,35 +550,29 @@ export default function Home() {
           )}
           {filteredAndSortedItemList.map((item) => (
               <Card key={item.tmdbId} className={`flex flex-col overflow-hidden transition-opacity duration-300 shadow-md hover:shadow-lg ${item.loadingUpdate ? 'opacity-60 animate-pulse' : ''}`}>
-                {/* Loading overlay */}
                 {item.loadingUpdate && (
                     <div className="absolute inset-0 flex items-center justify-center bg-background/70 z-30 rounded-lg">
                        <Loader2 className="h-6 w-6 animate-spin text-primary" />
                     </div>
                 )}
-                 {/* Poster Image */}
                  <div className="relative aspect-[2/3] w-full bg-muted">
                      <img
-                        // Use the helper function for the image URL
                         src={getTmdbImageUrl(item.posterPath, "w342")}
                         alt={`Poster de ${item.title}`}
                         className="absolute inset-0 h-full w-full object-cover"
                         loading="lazy"
-                        // Add error handling for the image itself
                         onError={(e) => {
                             console.warn(`Failed to load image for ${item.title}: ${e.currentTarget.src}`);
-                            e.currentTarget.src = 'https://placehold.co/342x513/e2e8f0/718096?text=No+Imagen'; // Set placeholder on error
-                            e.currentTarget.onerror = null; // Prevent infinite loop if placeholder also fails
+                            e.currentTarget.src = 'https://placehold.co/342x513/e2e8f0/718096?text=No+Imagen';
+                            e.currentTarget.onerror = null;
                         }}
                      />
-                     {/* Type Badge */}
                      <div className="absolute top-2 left-2 bg-black/70 text-white px-2 py-0.5 rounded text-xs font-semibold backdrop-blur-sm z-10 flex items-center">
                           {item.type === 'movie' ? <Film className="h-3 w-3 mr-1" /> : <Tv className="h-3 w-3 mr-1" />}
                           {item.type === 'movie' ? 'Película' : 'Serie'} {item.releaseYear ? `(${item.releaseYear})` : ''}
                      </div>
-                      {/* Delete Button */}
                       <Button
-                          variant="destructive" // More visible delete
+                          variant="destructive"
                           size="icon"
                           className="absolute top-1 right-1 h-7 w-7 text-white bg-black/50 hover:bg-red-600 rounded-full z-20 opacity-70 hover:opacity-100 transition-opacity"
                           onClick={() => deleteItem(item.tmdbId)}
@@ -584,7 +582,6 @@ export default function Home() {
                       </Button>
                  </div>
 
-                 {/* Content Below Poster */}
                  <div className="p-3 flex flex-col flex-grow">
                     <CardHeader className="p-0 pb-2">
                         <CardTitle className="text-sm font-semibold line-clamp-1" title={item.title}>{item.title}</CardTitle>
@@ -600,33 +597,47 @@ export default function Home() {
                           </CardDescription>
                        )}
                     </CardHeader>
-                    <CardContent className="p-0 space-y-3 flex-grow flex flex-col justify-between mt-auto"> {/* mt-auto pushes content down */}
+                    <CardContent className="p-0 space-y-2 flex-grow flex flex-col justify-between mt-auto"> {/* Adjusted spacing */}
                         {/* Rating */}
                        <div className="flex items-center justify-between mt-1">
                             <Label className="text-xs font-medium">Puntuación:</Label>
                             <StarRating
                                 rating={item.rating}
                                 onRatingChange={(newRating) => updateRating(item.tmdbId, newRating)}
-                                size={4} // Slightly smaller stars
+                                size={4}
                             />
                        </div>
-                       {/* User Season Input (only for Series) */}
+                       {/* User Season & Episode Input (only for Series) */}
                        {item.type === 'series' && (
-                           <div>
-                            <Label htmlFor={`user-season-${item.tmdbId}`} className="text-xs font-medium">Tu Temporada:</Label>
-                            <Input
-                                type="number"
-                                min="0"
-                                id={`user-season-${item.tmdbId}`}
-                                value={item.userSeason}
-                                onChange={(e) => updateUserSeason(item.tmdbId, e.target.value)}
-                                className="mt-1 h-8 text-sm" // Smaller input
-                                placeholder="e.g., 1"
-                            />
+                           <div className="grid grid-cols-2 gap-2"> {/* Grid for side-by-side */}
+                               <div>
+                                <Label htmlFor={`user-season-${item.tmdbId}`} className="text-xs font-medium block mb-0.5">Tu Temp:</Label>
+                                <Input
+                                    type="number"
+                                    min="0"
+                                    id={`user-season-${item.tmdbId}`}
+                                    value={item.userSeason}
+                                    onChange={(e) => updateUserSeason(item.tmdbId, e.target.value)}
+                                    className="h-8 text-sm"
+                                    placeholder="S"
+                                />
+                              </div>
+                               <div>
+                                <Label htmlFor={`user-episode-${item.tmdbId}`} className="text-xs font-medium block mb-0.5">Tu Ep:</Label>
+                                <Input
+                                    type="number" // Keep as number for simplicity, user can decide meaning
+                                    min="0"
+                                    id={`user-episode-${item.tmdbId}`}
+                                    value={item.userEpisode}
+                                    onChange={(e) => updateUserEpisode(item.tmdbId, e.target.value)} // *** LLAMAR A NUEVA FUNCIÓN ***
+                                    className="h-8 text-sm"
+                                    placeholder="Ep"
+                                />
+                              </div>
                           </div>
                        )}
                        {/* Spacer for movies to align layout */}
-                       {item.type === 'movie' && <div className="h-[56px]"></div>} {/* Adjust height to match series input+label approx */}
+                       {item.type === 'movie' && <div className="h-[56px]"></div>}
                     </CardContent>
                  </div>
               </Card>

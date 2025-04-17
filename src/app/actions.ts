@@ -16,7 +16,8 @@ interface StoredItemInfo {
   title: string;
   type: ItemType;
   latestSeason: number | null; // Store season count as number
-  userSeason: string; // Keep as string for input flexibility, parse when needed
+  userSeason: string; // Keep as string for input flexibility
+  userEpisode: string; // *** NUEVO CAMPO: Episodio actual del usuario (string) ***
   rating: number; // 0-5
   // Store poster path and year for faster loading/display
   posterPath?: string | null;
@@ -25,7 +26,6 @@ interface StoredItemInfo {
 
 // --- File Path Configuration ---
 const dataDir = path.resolve(process.cwd(), 'data');
-// Rename the data file if you haven't already
 const dataFilePath = path.join(dataDir, 'tracker-data.json');
 
 // --- Helper Functions for File I/O ---
@@ -53,15 +53,15 @@ async function readTrackerData(): Promise<StoredItemInfo[]> {
     const parsedData = JSON.parse(fileContent) as any[]; // Parse as any[] for migration
 
     // Validate and map data, ensuring all fields exist
-    // Filter out items missing the crucial tmdbId
     const validatedData = parsedData
       .map(item => {
-         // Basic validation and default values
          const type: ItemType = item.type === 'movie' || item.type === 'series' ? item.type : 'movie';
          const tmdbId = typeof item.tmdbId === 'number' ? item.tmdbId : null;
          const rating = typeof item.rating === 'number' && item.rating >= 0 && item.rating <= 5 ? item.rating : 0;
          const latestSeason = type === 'series' && typeof item.latestSeason === 'number' ? item.latestSeason : null;
-         const userSeason = type === 'series' ? String(item.userSeason || '0') : '0'; // Ensure string, default '0'
+         const userSeason = type === 'series' ? String(item.userSeason || '0') : '0';
+         // *** LEER userEpisode (default '0' si falta) ***
+         const userEpisode = type === 'series' ? String(item.userEpisode || '0') : '0';
 
          if (tmdbId === null) {
              console.warn(`Item "${item.title || 'Unknown'}" is missing tmdbId and will be filtered out.`);
@@ -74,6 +74,7 @@ async function readTrackerData(): Promise<StoredItemInfo[]> {
              type: type,
              latestSeason: latestSeason,
              userSeason: userSeason,
+             userEpisode: userEpisode, // *** AÑADIDO ***
              rating: rating,
              posterPath: item.posterPath !== undefined ? item.posterPath : null,
              releaseYear: item.releaseYear !== undefined ? item.releaseYear : null,
@@ -89,11 +90,10 @@ async function readTrackerData(): Promise<StoredItemInfo[]> {
       return [];
     } else if (error instanceof SyntaxError) {
       console.error(`Error parsing JSON from ${dataFilePath}. Check file integrity. Returning empty list.`, error);
-      // Consider backup/recovery logic here
       return [];
     } else {
       console.error(`Error reading tracker data file ${dataFilePath}:`, error);
-      return []; // Return empty on other errors
+      return [];
     }
   }
 }
@@ -104,13 +104,14 @@ async function writeTrackerData(itemList: StoredItemInfo[]): Promise<boolean> {
   try {
     // Ensure structure and filter out potential null/undefined before saving
     const listToWrite = itemList
-        .filter(item => typeof item.tmdbId === 'number') // Ensure tmdbId is valid before saving
+        .filter(item => typeof item.tmdbId === 'number')
         .map(item => ({
             tmdbId: item.tmdbId,
             title: item.title,
             type: item.type,
             latestSeason: item.type === 'series' ? item.latestSeason : null,
             userSeason: item.type === 'series' ? item.userSeason : '0',
+            userEpisode: item.type === 'series' ? item.userEpisode : '0', // *** GUARDAR userEpisode (o '0' para pelis) ***
             rating: item.rating ?? 0,
             posterPath: item.posterPath,
             releaseYear: item.releaseYear,
@@ -132,9 +133,8 @@ export async function loadItemsAction(): Promise<StoredItemInfo[]> {
 }
 
 export async function saveItemsAction(itemList: StoredItemInfo[]): Promise<{ success: boolean }> {
-  // Filter out potential duplicates based on tmdbId before saving
   const uniqueItemList = itemList.reduce((acc, current) => {
-      if (typeof current.tmdbId !== 'number') return acc; // Skip items without valid id
+      if (typeof current.tmdbId !== 'number') return acc;
       const x = acc.find(item => item.tmdbId === current.tmdbId);
       if (!x) {
           return acc.concat([current]);
@@ -149,7 +149,7 @@ export async function saveItemsAction(itemList: StoredItemInfo[]): Promise<{ suc
 }
 
 // --- TMDb API Interaction ---
-
+// (searchTmdbAction and fetchSeriesDetailsFromTmdb remain unchanged)
 // Interface for TMDb search results (as expected by frontend)
 interface TmdbSearchResult {
   id: number;
@@ -246,8 +246,8 @@ export async function updateItemsFromTmdbAction(): Promise<{ updatedList: Stored
   console.log("Starting updateItemsFromTmdbAction...");
   if (!TMDB_API_KEY) {
       console.error("TMDb API Key is missing. Cannot update.");
-      const currentItemList = await readTrackerData(); // Read data even if key is missing for potential migration
-      await writeTrackerData(currentItemList); // Save potentially validated data
+      const currentItemList = await readTrackerData();
+      await writeTrackerData(currentItemList);
       return { updatedList: currentItemList, errors: [{ title: "Error de Configuración", error: "Falta la clave API de TMDb en el servidor." }] };
   }
 
@@ -256,21 +256,20 @@ export async function updateItemsFromTmdbAction(): Promise<{ updatedList: Stored
 
   if (seriesList.length === 0) {
     console.log("No series with valid TMDb IDs in the list to update.");
-    await writeTrackerData(currentItemList); // Save potentially validated data
+    await writeTrackerData(currentItemList);
     return { updatedList: currentItemList, errors: [] };
   }
 
   console.log(`Found ${seriesList.length} series to update from TMDb.`);
   const updatePromises: Promise<{ tmdbId: number, latestSeason: number | null, error?: string }>[] = [];
 
-  // Create fetch promises with delay
   for (let i = 0; i < seriesList.length; i++) {
     const series = seriesList[i];
     const promise = new Promise<{ tmdbId: number, latestSeason: number | null, error?: string }>(resolve => {
       setTimeout(async () => {
         const result = await fetchSeriesDetailsFromTmdb(series.tmdbId);
         resolve({ tmdbId: series.tmdbId, ...result });
-      }, i * 250); // API delay can often be shorter than scraping
+      }, i * 250);
     });
     updatePromises.push(promise);
   }
@@ -281,18 +280,16 @@ export async function updateItemsFromTmdbAction(): Promise<{ updatedList: Stored
   const tmdbResultMap = new Map(updateResults.map(r => [r.tmdbId, r]));
 
   const newUpdatedList: StoredItemInfo[] = currentItemList.map(item => {
-    // Only potentially update items that are series and were fetched
     if (item.type === 'series' && tmdbResultMap.has(item.tmdbId)) {
-      const result = tmdbResultMap.get(item.tmdbId)!; // We know it exists
-      const originalTitle = seriesList.find(s => s.tmdbId === item.tmdbId)?.title || `ID ${item.tmdbId}`; // Get title for error reporting
+      const result = tmdbResultMap.get(item.tmdbId)!;
+      const originalTitle = seriesList.find(s => s.tmdbId === item.tmdbId)?.title || `ID ${item.tmdbId}`;
 
       if (result.error) {
-        // If fetching details failed, return the original item completely unchanged
         console.warn(`Error updating ${originalTitle}: ${result.error}`);
         updateErrors.push({ title: originalTitle, error: result.error });
-        return item; // Return original item unchanged
+        return item; // Return original item unchanged on error
       } else {
-        // If fetching was successful, update latestSeason and explicitly preserve others
+        // Update latestSeason and explicitly preserve others
         console.log(`Updating ${originalTitle} latestSeason to ${result.latestSeason}`);
         return {
             tmdbId: item.tmdbId,
@@ -300,6 +297,7 @@ export async function updateItemsFromTmdbAction(): Promise<{ updatedList: Stored
             type: item.type,
             latestSeason: result.latestSeason, // The updated field
             userSeason: item.userSeason,       // Explicitly preserve
+            userEpisode: item.userEpisode,     // *** Explicitly preserve userEpisode ***
             rating: item.rating,               // Explicitly preserve
             posterPath: item.posterPath,       // Explicitly preserve posterPath
             releaseYear: item.releaseYear,     // Explicitly preserve releaseYear
