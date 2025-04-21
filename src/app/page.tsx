@@ -1,649 +1,666 @@
-'use client';
+"use client";
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Button } from '@/components/ui/button';
+import * as React from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
+import {
+    loadItemsAction,
+    saveItemsAction,
+    searchTmdbAction,
+    updateItemsFromTmdbAction,
+} from "./actions";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Skeleton } from '@/components/ui/skeleton';
-import { useToast } from '@/hooks/use-toast';
-import { Trash, Star, Search, ArrowUpDown, Film, Tv, X, Loader2, PlusCircle } from "lucide-react";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+    Card,
+    CardContent,
+    CardDescription,
+    CardFooter,
+    CardHeader,
+    CardTitle,
+} from "@/components/ui/card";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-  DialogFooter,
-  DialogClose,
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
+    DialogTrigger,
+    DialogFooter,
+    DialogClose,
 } from "@/components/ui/dialog";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { StarRating } from '@/components/ui/star-rating'; // Ensure this component exists
 import {
-  loadItemsAction,
-  saveItemsAction,
-  updateItemsFromTmdbAction,
-  searchTmdbAction
-} from '@/app/actions';
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
+import { StarRating } from "@/components/ui/star-rating";
+import { Icons } from "@/components/icons";
+import { useToast } from "@/hooks/use-toast";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 
-// --- Interfaces ---
-type ItemType = 'movie' | 'series';
+// --- Data Structures (matching actions.ts) ---
+type ItemType = "movie" | "series";
 
-// Frontend state includes UI flags
-interface ItemInfo {
-  tmdbId: number;
-  title: string;
-  type: ItemType;
-  latestSeason: number | null;
-  userSeason: string;
-  userEpisode: string; // *** NUEVO CAMPO: Episodio actual del usuario ***
-  rating: number;
-  loadingUpdate?: boolean;
-  errorUpdate?: string;
-  posterPath?: string | null;
-  releaseYear?: string | null;
-}
-
-// Data stored in the file
 interface StoredItemInfo {
-  tmdbId: number;
-  title: string;
-  type: ItemType;
-  latestSeason: number | null;
-  userSeason: string;
-  userEpisode: string; // *** NUEVO CAMPO ***
-  rating: number;
-  posterPath?: string | null;
-  releaseYear?: string | null;
+    tmdbId: number;
+    title: string;
+    type: ItemType;
+    latestSeason: number | null;
+    userSeason: string;
+    userEpisode: string;
+    rating: number;
+    posterPath?: string | null;
+    releaseYear?: string | null;
 }
 
-// TMDb search result structure
 interface TmdbSearchResult {
-  id: number;
-  title?: string; // Movie
-  name?: string; // Series
-  media_type: 'movie' | 'tv';
-  release_date?: string;
-  first_air_date?: string;
-  poster_path?: string | null;
-  overview?: string;
+    id: number;
+    title?: string;
+    name?: string;
+    media_type: "movie" | "tv";
+    release_date?: string;
+    first_air_date?: string;
+    poster_path?: string | null;
+    overview?: string;
 }
 
-// --- Sorting Types ---
-type SortKey = 'default' | 'title' | 'rating';
-type SortOrder = 'asc' | 'desc';
+// --- Sorting Options ---
+type SortKey = "title" | "rating";
+type SortDirection = "asc" | "desc";
 interface SortOption {
-    value: string;
+    value: `${SortKey}-${SortDirection}`;
     label: string;
 }
 
-// --- Main Component ---
-export default function Home() {
-  const [itemList, setItemList] = useState<ItemInfo[]>([]);
-  const [isLoadingList, setIsLoadingList] = useState<boolean>(true);
-  const [isUpdatingAll, setIsUpdatingAll] = useState<boolean>(false);
-  const [searchTerm, setSearchTerm] = useState<string>('');
-  const [sortCriteria, setSortCriteria] = useState<string>('title-asc');
-  const { toast } = useToast();
+const sortOptions: SortOption[] = [
+    { value: "title-asc", label: "Título (A-Z)" },
+    { value: "title-desc", label: "Título (Z-A)" },
+    { value: "rating-desc", label: "Valoración (Mayor a Menor)" },
+    { value: "rating-asc", label: "Valoración (Menor a Mayor)" },
+];
 
-  // State for TMDb Search Dialog
-  const [isSearchDialogOpen, setIsSearchDialogOpen] = useState(false);
-  const [tmdbSearchQuery, setTmdbSearchQuery] = useState('');
-  const [tmdbSearchResults, setTmdbSearchResults] = useState<TmdbSearchResult[]>([]);
-  const [isSearchingTmdb, setIsSearchingTmdb] = useState(false);
-  const [tmdbSearchError, setTmdbSearchError] = useState<string | null>(null);
+// --- Recommendation Structure ---
+interface RecommendationResult {
+    title: string;
+    reason?: string;
+}
 
-
-  // --- Sorting Options ---
-   const sortOptions: SortOption[] = [
-        { value: 'title-asc', label: 'Título (A-Z)' },
-        { value: 'title-desc', label: 'Título (Z-A)' },
-        { value: 'rating-desc', label: 'Puntuación (Mayor a Menor)' },
-        { value: 'rating-asc', label: 'Puntuación (Menor a Mayor)' },
-    ];
-
-  // --- Data Loading ---
-  const loadItemList = useCallback(async () => {
-    console.log("Loading item list...");
-    setIsLoadingList(true);
-    try {
-      const storedList = await loadItemsAction();
-      console.log("Loaded items:", storedList);
-      setItemList(storedList.map(item => ({
-          ...item,
-          // Ensure userEpisode is mapped correctly
-          userEpisode: item.userEpisode || '0', // Default to '0' if missing
-          loadingUpdate: false,
-          errorUpdate: undefined,
-          posterPath: item.posterPath,
-          releaseYear: item.releaseYear,
-      })));
-    } catch (error: any) {
-        console.error("Error loading list:", error);
-        toast({
-            title: 'Error cargando lista',
-            description: `No se pudieron cargar los datos: ${error.message}`,
-            variant: 'destructive',
-        });
-        setItemList([]);
-    } finally {
-      setIsLoadingList(false);
-    }
-  }, [toast]);
-
-  useEffect(() => {
-    loadItemList();
-  }, [loadItemList]);
-
-  // --- Data Saving Utility (Debounced) ---
-  const debounce = <F extends (...args: any[]) => any>(func: F, waitFor: number) => {
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    return (...args: Parameters<F>): Promise<ReturnType<F>> =>
-        new Promise((resolve) => {
-          if (timeoutId) clearTimeout(timeoutId);
-          timeoutId = setTimeout(() => {
-            timeoutId = null;
-            resolve(func(...args));
-          }, waitFor);
-        });
-  };
-
-  const saveItemsToServer = useCallback(async (listToSave: ItemInfo[]) => {
-    // Map frontend state to stored structure including userEpisode
-    const storedList: StoredItemInfo[] = listToSave.map(({ tmdbId, title, type, latestSeason, userSeason, userEpisode, rating, posterPath, releaseYear }) => ({
-      tmdbId,
-      title,
-      type,
-      latestSeason,
-      userSeason,
-      userEpisode: type === 'series' ? userEpisode : '0', // *** GUARDAR userEpisode (o '0' para pelis) ***
-      rating: rating ?? 0,
-      posterPath,
-      releaseYear,
-    }));
-    // console.log("Calling saveItemsAction with:", storedList);
-    const result = await saveItemsAction(storedList);
-    if (!result.success) {
-      console.error("Failed to save list to server.");
-      toast({
-        title: 'Error al guardar',
-        description: 'No se pudo guardar la lista en el servidor.',
-        variant: 'destructive',
-      });
-    } else {
-      console.log("List saved successfully.");
-    }
-  }, [toast]);
-
-  const debouncedSave = useCallback(debounce(saveItemsToServer, 1500), [saveItemsToServer]);
-
-  // --- TMDb Search Logic ---
-  const handleTmdbSearch = async () => {
-      if (!tmdbSearchQuery.trim()) return;
-      console.log(`Searching TMDb for: "${tmdbSearchQuery}"`);
-      setIsSearchingTmdb(true);
-      setTmdbSearchError(null);
-      setTmdbSearchResults([]);
-      try {
-          const { results, error } = await searchTmdbAction(tmdbSearchQuery);
-          if (error) {
-              console.error("TMDb Search Error:", error);
-              setTmdbSearchError(error);
-          } else {
-              console.log("TMDb Search Results:", results);
-              setTmdbSearchResults(results);
-              if (results.length === 0) {
-                  setTmdbSearchError("No se encontraron resultados.");
-              }
-          }
-      } catch (e: any) {
-          console.error("Unexpected search error:", e);
-          setTmdbSearchError("Error inesperado durante la búsqueda.");
-      } finally {
-          setIsSearchingTmdb(false);
-      }
-  };
-
-  // --- Add Item Logic (After Selecting from TMDb Search) ---
-  const handleAddItemFromTmdb = (selectedItem: TmdbSearchResult) => {
-      if (itemList.some(item => item.tmdbId === selectedItem.id)) {
-          toast({
-              title: "Elemento Duplicado",
-              description: `"${selectedItem.title || selectedItem.name}" ya está en tu lista.`,
-              variant: "warning",
-          });
-          return;
-      }
-
-      const itemType: ItemType = selectedItem.media_type === 'tv' ? 'series' : 'movie';
-      const itemTitle = selectedItem.title || selectedItem.name || 'Título Desconocido';
-      const releaseDate = selectedItem.release_date || selectedItem.first_air_date;
-      const releaseYear = releaseDate ? new Date(releaseDate).getFullYear().toString() : null;
-
-      const newItem: ItemInfo = {
-          tmdbId: selectedItem.id,
-          title: itemTitle,
-          type: itemType,
-          latestSeason: null,
-          userSeason: '0',
-          userEpisode: '0', // *** INICIALIZAR userEpisode ***
-          rating: 0,
-          posterPath: selectedItem.poster_path,
-          releaseYear: releaseYear,
-          loadingUpdate: false,
-          errorUpdate: undefined,
-      };
-
-      console.log("Adding new item:", newItem);
-      const updatedList = [...itemList, newItem];
-      setItemList(updatedList);
-      debouncedSave(updatedList);
-
-      toast({
-          title: "Elemento Añadido",
-          description: `"${itemTitle}" añadido a tu lista.`,
-      });
-
-      setIsSearchDialogOpen(false);
-      setTmdbSearchQuery('');
-      setTmdbSearchResults([]);
-      setTmdbSearchError(null);
-  };
+// --- Main Page Component ---
+export default function TrackerPage() {
+    const [itemList, setItemList] = useState<StoredItemInfo[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [isSaving, setIsSaving] = useState(false); // Keep for potential immediate saves like delete? Maybe not needed now.
+    const [isUpdating, setIsUpdating] = useState(false);
+    const [isSearching, setIsSearching] = useState(false);
+    const [isRecommending, setIsRecommending] = useState(false);
+    const [searchTerm, setSearchTerm] = useState("");
+    const [searchResults, setSearchResults] = useState<TmdbSearchResult[]>([]);
+    const [searchError, setSearchError] = useState<string | null>(null);
+    const [searchQuery, setSearchQuery] = useState("");
+    const [isSearchDialogOpen, setIsSearchDialogOpen] = useState(false);
+    const [sortCriteria, setSortCriteria] = useState<SortOption["value"]>("title-asc");
+    const [recommendations, setRecommendations] = useState<RecommendationResult[]>([]);
+    const [isRecommendationsDialogOpen, setIsRecommendationsDialogOpen] = useState(false);
+    const [recommendationError, setRecommendationError] = useState<string | null>(null);
 
 
-  // --- Other CRUD Operations ---
-  const updateUserSeason = (tmdbId: number, newUserSeason: string) => {
-    const seasonNum = parseInt(newUserSeason, 10);
-    if ((isNaN(seasonNum) || seasonNum < 0) && newUserSeason !== '') return;
+    const { toast } = useToast();
 
-    const updatedList = itemList.map((item) =>
-        item.tmdbId === tmdbId ? { ...item, userSeason: newUserSeason || '0' } : item
+    // --- Load Initial Data ---
+    useEffect(() => {
+        async function loadData() {
+            setIsLoading(true);
+            try {
+                const loadedItems = await loadItemsAction();
+                setItemList(loadedItems);
+            } catch (error) {
+                console.error("Error loading items:", error);
+                toast({
+                    title: "Error",
+                    description: "No se pudieron cargar los elementos.",
+                    variant: "destructive",
+                });
+            } finally {
+                setIsLoading(false);
+            }
+        }
+        loadData();
+    }, [toast]);
+
+    // --- Save Data ---
+    // Debounced save function for frequent changes (rating, season, episode, add, delete)
+    const debouncedSave = useCallback(
+        debounce(async (items: StoredItemInfo[]) => {
+            console.log("Debounced save triggered with items:", items); // Add log
+            try {
+                const result = await saveItemsAction(items);
+                if (!result.success) {
+                    throw new Error("Debounced save operation failed");
+                }
+                console.log("Items saved via debounce."); // Log for clarity
+            } catch (error) {
+                console.error("Error saving items via debounce:", error);
+                toast({
+                    title: "Error de Guardado Automático",
+                    description: "No se pudieron guardar los últimos cambios.",
+                    variant: "destructive",
+                });
+            }
+        }, 1500),
+        [toast] // Dependency array only includes toast
     );
-    setItemList(updatedList);
-    debouncedSave(updatedList);
-  };
 
-  // *** NUEVA FUNCIÓN para actualizar episodio ***
-  const updateUserEpisode = (tmdbId: number, newUserEpisode: string) => {
-    const episodeNum = parseInt(newUserEpisode, 10);
-    // Allow 0, handle empty string during typing, prevent negative
-    if ((isNaN(episodeNum) || episodeNum < 0) && newUserEpisode !== '') return;
+    // --- Event Handlers ---
 
-    const updatedList = itemList.map((item) =>
-        item.tmdbId === tmdbId ? { ...item, userEpisode: newUserEpisode || '0' } : item // Default to '0' if empty
-    );
-    setItemList(updatedList);
-    debouncedSave(updatedList);
-  };
-
-
-   const updateRating = (tmdbId: number, newRating: number) => {
-        const updatedList = itemList.map((item) =>
-            item.tmdbId === tmdbId ? { ...item, rating: newRating } : item
-        );
-        setItemList(updatedList);
-        debouncedSave(updatedList);
+    const handleRatingChange = (tmdbId: number, newRating: number) => {
+        setItemList((prevList) => {
+            const newList = prevList.map((item) =>
+                item.tmdbId === tmdbId ? { ...item, rating: newRating } : item
+            );
+            debouncedSave(newList); // Use debounced save
+            return newList;
+        });
     };
 
-  const deleteItem = (tmdbIdToDelete: number) => {
-    const itemToDelete = itemList.find(item => item.tmdbId === tmdbIdToDelete);
-    console.log(`Deleting item: ${itemToDelete?.title} (ID: ${tmdbIdToDelete})`);
-    const updatedList = itemList.filter((item) => item.tmdbId !== tmdbIdToDelete);
-    setItemList(updatedList);
-    toast({
-      title: 'Elemento Eliminado',
-      description: `"${itemToDelete?.title || 'Elemento'}" ha sido eliminado.`,
-    });
-    debouncedSave(updatedList);
-  };
-
-  // --- Update Latest Seasons ---
-  const handleUpdateItems = async () => {
-    const itemsToUpdate = itemList.filter(item => item.type === 'series');
-     if (itemsToUpdate.length === 0) {
-       toast({ title: "Info", description: "No hay series en la lista para actualizar." });
-       return;
-    }
-    console.log(`Updating ${itemsToUpdate.length} series from TMDb...`);
-    setIsUpdatingAll(true);
-    setItemList(prevList => prevList.map(item =>
-        item.type === 'series' ? { ...item, loadingUpdate: true, errorUpdate: undefined } : item
-    ));
-
-    try {
-      const { updatedList: serverUpdatedList, errors } = await updateItemsFromTmdbAction();
-      console.log("Received from server after update:", serverUpdatedList);
-
-      // Update local state ONCE with the results from the server and handle errors
-      setItemList(serverUpdatedList.map(serverItem => {
-          const errorInfo = errors.find(e => e.title.includes(`ID ${serverItem.tmdbId}`) || e.title === serverItem.title);
-          return {
-              ...serverItem, // Preserves ALL fields from the server response
-              // Ensure userEpisode is preserved from the server response as well
-              userEpisode: serverItem.userEpisode || '0',
-              loadingUpdate: false,
-              errorUpdate: errorInfo ? errorInfo.error : undefined,
-          };
-      }));
-
-      // Show toasts AFTER state update
-      if (errors.length > 0) {
-        console.warn("Errors during update:", errors);
-        toast({
-          title: `Actualización parcial (${errors.length} errores)`,
-          description: `No se pudieron actualizar algunas series. Ver consola para detalles.`,
-          variant: 'warning',
-          duration: 5000,
+    const handleSeasonChange = (tmdbId: number, newSeason: string) => {
+        setItemList((prevList) => {
+            const newList = prevList.map((item) =>
+                item.tmdbId === tmdbId ? { ...item, userSeason: newSeason } : item
+            );
+            debouncedSave(newList); // Use debounced save
+            return newList;
         });
-      } else {
-        toast({
-          title: 'Actualización Completa',
-          description: 'Datos de TMDb actualizados correctamente.',
+    };
+
+    const handleEpisodeChange = (tmdbId: number, newEpisode: string) => {
+        setItemList((prevList) => {
+            const newList = prevList.map((item) =>
+                item.tmdbId === tmdbId ? { ...item, userEpisode: newEpisode } : item
+            );
+            debouncedSave(newList); // Use debounced save
+            return newList;
         });
-      }
+    };
 
-    } catch (error: any) {
-        console.error("Error calling updateItemsFromTmdbAction:", error);
-        toast({
-            title: 'Error al Actualizar',
-            description: `Ocurrió un error inesperado: ${error.message}`,
-            variant: 'destructive',
+    // --- MODIFIED handleDeleteItem ---
+    const handleDeleteItem = (tmdbId: number) => {
+        let deletedItemTitle = "Elemento"; // Default title
+        let newList: StoredItemInfo[] = []; // Define newList outside setItemList
+
+        setItemList((prevList) => {
+            const itemToDelete = prevList.find(item => item.tmdbId === tmdbId);
+            if (itemToDelete) {
+                deletedItemTitle = `"${itemToDelete.title}"`;
+            }
+            newList = prevList.filter((item) => item.tmdbId !== tmdbId); // Assign inside
+            // saveImmediately(newList); // <-- REMOVE THIS
+            return newList; // Update local state immediately
         });
-       setItemList(prevList => prevList.map(item => ({ ...item, loadingUpdate: false })));
-    } finally {
-      setIsUpdatingAll(false);
-    }
-  };
 
-  // --- Filtering and Sorting Logic ---
-  const filteredAndSortedItemList = useMemo(() => {
-    let filteredList = itemList;
+        // Use debounced save instead of immediate save
+        debouncedSave(newList);
 
-    if (searchTerm.trim() !== '') {
-      filteredList = itemList.filter(item =>
-        item.title.toLowerCase().includes(searchTerm.toLowerCase())
-      );
-    }
+        toast({ title: "Elemento eliminado", description: `${deletedItemTitle} se ha quitado de tu lista.` });
+    };
+    // --- End MODIFIED handleDeleteItem ---
 
-    const [key, order] = sortCriteria.split('-') as [SortKey | 'default', SortOrder | undefined];
+    const handleSearchTmdb = async () => {
+        if (!searchQuery.trim()) {
+            setSearchError("Introduce un título para buscar.");
+            setSearchResults([]);
+            return;
+        }
+        setIsSearching(true);
+        setSearchError(null);
+        setSearchResults([]);
+        try {
+            const { results, error } = await searchTmdbAction(searchQuery);
+            if (error) {
+                setSearchError(error);
+            } else {
+                setSearchResults(results);
+                if (results.length === 0) {
+                    setSearchError("No se encontraron resultados para tu búsqueda.");
+                }
+            }
+        } catch (error: any) {
+            console.error("Error during TMDb search action:", error);
+            setSearchError(error.message || "Error desconocido durante la búsqueda.");
+        } finally {
+            setIsSearching(false);
+        }
+    };
 
-    if (key === 'default' || !order || (key !== 'title' && key !== 'rating')) {
-         return [...filteredList].sort((a, b) => a.title.localeCompare(b.title));
-    }
+    const handleAddItem = (result: TmdbSearchResult) => {
+        if (itemList.some(item => item.tmdbId === result.id)) {
+            toast({ title: "Duplicado", description: "Este elemento ya está en tu lista.", variant: "default" });
+            return;
+        }
 
-    return [...filteredList].sort((a, b) => {
-      let comparison = 0;
-      if (key === 'title') {
-        comparison = a.title.localeCompare(b.title);
-      } else if (key === 'rating') {
-        comparison = (a.rating ?? 0) - (b.rating ?? 0);
-      }
-      return order === 'asc' ? comparison : -comparison;
-    });
-  }, [itemList, searchTerm, sortCriteria]);
+        const newItem: StoredItemInfo = {
+            tmdbId: result.id,
+            title: result.title || result.name || "Título Desconocido",
+            type: result.media_type === 'tv' ? 'series' : 'movie',
+            latestSeason: null,
+            userSeason: '0',
+            userEpisode: '0',
+            rating: 0,
+            posterPath: result.poster_path,
+            releaseYear: result.release_date?.substring(0, 4) || result.first_air_date?.substring(0, 4) || null,
+        };
+
+        let newList: StoredItemInfo[] = []; // Define newList outside setItemList
+        setItemList((prevList) => {
+            newList = [...prevList, newItem]; // Assign inside to get latest state
+            return newList; // Update local state immediately
+        });
+
+        // Use debounced save instead of immediate save
+        debouncedSave(newList);
+
+        toast({ title: "Añadido", description: `"${newItem.title}" se ha añadido a tu lista.` });
+
+        // These state updates are generally safe after the primary list update
+        setIsSearchDialogOpen(false);
+        setSearchQuery("");
+        setSearchResults([]);
+        setSearchError(null);
+    };
 
 
-  // --- Render Logic ---
-  if (isLoadingList) {
+    const handleUpdateData = async () => {
+        setIsUpdating(true);
+        toast({ title: "Actualizando...", description: "Obteniendo datos de TMDb..." });
+        try {
+            const { updatedList, errors } = await updateItemsFromTmdbAction();
+            setItemList(updatedList);
+            if (errors.length > 0) {
+                errors.forEach(err => {
+                    toast({ title: `Error al actualizar "${err.title}"`, description: err.error, variant: "destructive" });
+                });
+            } else {
+                toast({ title: "Datos Actualizados", description: "Información de temporadas actualizada." });
+            }
+        } catch (error: any) {
+            console.error("Error updating data from TMDb:", error);
+            toast({
+                title: "Error de Actualización",
+                description: error.message || "No se pudieron actualizar los datos desde TMDb.",
+                variant: "destructive",
+            });
+        } finally {
+            setIsUpdating(false);
+        }
+    };
+
+    // --- AI Recommendation Handler using fetch ---
+    const handleGetRecommendations = async () => {
+        setIsRecommending(true);
+        setRecommendations([]);
+        setRecommendationError(null);
+        setIsRecommendationsDialogOpen(true);
+
+        // Prepare data for the API call
+        const ratedSeriesForAI = itemList
+            .filter(item => item.rating > 0)
+            .map(item => ({
+                title: item.title,
+                rating: item.rating,
+            }));
+
+        const excludeTitles = itemList.map(item => item.title);
+
+        if (ratedSeriesForAI.length === 0) {
+            setRecommendationError("No has valorado ninguna serie o película todavía. ¡Valora algunas para obtener recomendaciones!");
+            setIsRecommending(false);
+            return;
+        }
+
+        try {
+            // Call the new API route
+            const response = await fetch('/api/recommendations', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    data: {
+                        ratedSeries: ratedSeriesForAI,
+                        excludeTitles: excludeTitles,
+                        count: 5,
+                    }
+                }),
+            });
+
+            // Check for HTTP errors first
+            if (!response.ok) {
+                let errorMsg = `Error del servidor: ${response.status}`;
+                try {
+                    const errorData = await response.json();
+                    errorMsg = errorData.error?.message || errorMsg;
+                } catch (parseError) { /* Ignore */ }
+                console.error("Recommendation API error response:", response.status, errorMsg);
+                throw new Error(errorMsg);
+            }
+
+            // Parse the successful JSON response
+            const result = await response.json();
+
+            // Check response structure
+            if (!result || !Array.isArray(result.recommendations)) {
+                if (result.message) {
+                    setRecommendationError(result.message);
+                    setIsRecommending(false);
+                    return;
+                }
+                console.error("Invalid response structure from API:", result);
+                throw new Error("La respuesta de la API no tuvo el formato esperado.");
+            }
+
+            // Set the recommendations
+            setRecommendations(result.recommendations);
+
+        } catch (err: any) {
+            console.error("Error fetching recommendations:", err);
+            setRecommendationError(err.message || "Ocurrió un error inesperado al obtener recomendaciones.");
+        } finally {
+            setIsRecommending(false);
+        }
+    };
+
+
+    // --- Filtering and Sorting Logic ---
+    const filteredAndSortedList = useMemo(() => {
+        const [key, direction] = sortCriteria.split("-") as [SortKey, SortDirection];
+
+        const filtered = itemList.filter((item) =>
+            item.title.toLowerCase().includes(searchTerm.toLowerCase())
+        );
+
+        return filtered.sort((a, b) => {
+            let compareA: string | number;
+            let compareB: string | number;
+
+            if (key === "title") {
+                compareA = a.title.toLowerCase();
+                compareB = b.title.toLowerCase();
+            } else { // key === 'rating'
+                compareA = a.rating;
+                compareB = b.rating;
+            }
+
+            if (compareA < compareB) {
+                return direction === "asc" ? -1 : 1;
+            }
+            if (compareA > compareB) {
+                return direction === "asc" ? 1 : -1;
+            }
+            return 0;
+        });
+    }, [itemList, searchTerm, sortCriteria]);
+
+    // --- Render ---
     return (
-        <div className="container mx-auto p-4 flex justify-center items-center min-h-screen">
-            <Loader2 className="h-8 w-8 animate-spin text-primary" />
-            <p className="ml-3 text-muted-foreground">Cargando lista...</p>
-        </div>
-    );
-  }
+        <div className="container mx-auto p-4 md:p-8">
+            <h1 className="text-3xl font-bold mb-6 text-center">Mi Lista de Películas y Series</h1>
 
-  // Helper to get TMDb image URL
-  const getTmdbImageUrl = (filePath: string | null | undefined, size: string = "w342") => {
-      const placeholder = 'https://placehold.co/342x513/e2e8f0/718096?text=No+Imagen';
-      if (!filePath) return placeholder;
-      return `https://image.tmdb.org/t/p/${size}${filePath}`;
-  }
-
-  return (
-      <div className="container mx-auto p-4 md:p-6">
-        <h1 className="text-3xl font-bold mb-8 text-center tracking-tight">Tracker Películas/Series</h1>
-
-        {/* --- Controls Row --- */}
-        <div className="mb-8 p-4 border rounded-lg bg-card shadow-sm">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
-                {/* Add Item Button (Opens Dialog) */}
-                <div className="md:col-span-3">
-                    <Dialog open={isSearchDialogOpen} onOpenChange={setIsSearchDialogOpen}>
-                        <DialogTrigger asChild>
-                            <Button className="w-full md:w-auto">
-                                <PlusCircle className="h-4 w-4 mr-2" />
-                                Añadir Película/Serie...
-                            </Button>
-                        </DialogTrigger>
-                        <DialogContent className="sm:max-w-[650px]">
-                            <DialogHeader>
-                                <DialogTitle>Buscar en TMDb</DialogTitle>
-                                <DialogDescription>
-                                    Busca una película o serie para añadir a tu lista.
-                                </DialogDescription>
-                            </DialogHeader>
-                            {/* Search Input and Button */}
-                            <div className="flex space-x-2 my-4">
-                                <Input
-                                    placeholder="Buscar título..."
-                                    value={tmdbSearchQuery}
-                                    onChange={(e) => setTmdbSearchQuery(e.target.value)}
-                                     onKeyDown={(e) => { if (e.key === 'Enter') handleTmdbSearch(); }}
-                                />
-                                <Button onClick={handleTmdbSearch} disabled={isSearchingTmdb || !tmdbSearchQuery.trim()} className="min-w-[100px]">
-                                    {isSearchingTmdb ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-                                    <span className="ml-2">Buscar</span>
-                                </Button>
-                            </div>
-                            {/* Search Results Area */}
-                            <ScrollArea className="h-[400px] border rounded-md">
-                                <div className="p-2 space-y-1">
-                                    {isSearchingTmdb && (
-                                        <div className="flex justify-center items-center h-full py-10">
-                                            <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                                            <p className="ml-2 text-muted-foreground">Buscando...</p>
-                                        </div>
-                                    )}
-                                    {tmdbSearchError && !isSearchingTmdb && (
-                                        <p className="text-center text-red-600 py-10 px-4">{tmdbSearchError}</p>
-                                    )}
-                                    {!isSearchingTmdb && tmdbSearchResults.map((result) => {
-                                        const title = result.title || result.name || 'Desconocido';
-                                        const year = result.release_date?.substring(0, 4) || result.first_air_date?.substring(0, 4);
-                                        const typeText = result.media_type === 'tv' ? 'Serie' : 'Película';
-                                        const alreadyExists = itemList.some(item => item.tmdbId === result.id);
-
-                                        return (
-                                            <div key={result.id}
-                                                className={`flex items-start space-x-3 p-2 rounded transition-colors duration-150 ${alreadyExists ? 'opacity-50 cursor-not-allowed' : 'hover:bg-accent hover:text-accent-foreground cursor-pointer'}`}
-                                                onClick={() => !alreadyExists && handleAddItemFromTmdb(result)}
-                                                title={alreadyExists ? `${title} ya está en tu lista` : `Añadir ${title}`}
-                                            >
-                                                 <img
-                                                    src={getTmdbImageUrl(result.poster_path, "w92")}
-                                                    alt={`Poster de ${title}`}
-                                                    className="h-20 w-[53px] rounded object-cover flex-shrink-0 bg-muted border"
-                                                    loading="lazy"
-                                                    onError={(e) => (e.currentTarget.src = 'https://placehold.co/53x80/e2e8f0/718096?text=N/A')}
-                                                />
-                                                <div className="flex-grow overflow-hidden pt-1">
-                                                    <p className="font-semibold truncate text-sm">{title} {year ? `(${year})` : ''}</p>
-                                                    <p className="text-xs text-muted-foreground">{typeText}</p>
-                                                    <p className="text-xs text-muted-foreground line-clamp-2 mt-1">{result.overview || 'Sin descripción.'}</p>
-                                                </div>
-                                                {alreadyExists && <span className="text-xs text-muted-foreground ml-auto mr-2 flex-shrink-0">(Añadido)</span>}
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </ScrollArea>
-                            <DialogFooter className="mt-4">
-                                 <DialogClose asChild>
-                                     <Button type="button" variant="outline">Cerrar</Button>
-                                 </DialogClose>
-                            </DialogFooter>
-                        </DialogContent>
-                    </Dialog>
-                </div>
-
-                 {/* Search Filter */}
-                 <div className="relative">
-                     <Label htmlFor="search-filter" className="mb-1 block text-sm font-medium">Filtrar Lista</Label>
-                     <Search className="absolute left-2.5 bottom-2.5 h-4 w-4 text-muted-foreground" />
-                     <Input
-                        id="search-filter"
-                        type="text"
-                        placeholder="Filtrar por título..."
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                        className="pl-8"
-                     />
-                </div>
-
-                {/* Sort Select */}
-                 <div>
-                     <Label htmlFor="sort-select" className="mb-1 block text-sm font-medium">Ordenar Por</Label>
-                     <Select value={sortCriteria} onValueChange={setSortCriteria}>
-                        <SelectTrigger id="sort-select" className="w-full">
-                             <ArrowUpDown className="inline-block h-4 w-4 mr-2" />
-                            <SelectValue placeholder="Ordenar por..." />
+            {/* --- Controls --- */}
+            <div className="flex flex-col md:flex-row gap-4 mb-6 items-center">
+                <Input
+                    type="text"
+                    placeholder="Filtrar por título..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="flex-grow"
+                />
+                <div className="flex flex-wrap gap-2 md:gap-4 w-full md:w-auto justify-center"> {/* Added flex-wrap and justify-center */}
+                    <Select value={sortCriteria} onValueChange={(value: SortOption["value"]) => setSortCriteria(value)}>
+                        <SelectTrigger className="w-full sm:w-[180px] md:w-[200px]"> {/* Responsive width */}
+                            <SelectValue placeholder="Ordenar Por" />
                         </SelectTrigger>
                         <SelectContent>
                             {sortOptions.map(option => (
-                                 <SelectItem key={option.value} value={option.value}>
+                                <SelectItem key={option.value} value={option.value}>
                                     {option.label}
                                 </SelectItem>
                             ))}
                         </SelectContent>
                     </Select>
+                    <Button onClick={handleUpdateData} disabled={isUpdating} variant="outline" className="w-auto flex-grow sm:flex-grow-0"> {/* Adjusted width */}
+                        {isUpdating ? <Icons.loader className="mr-2 h-4 w-4 animate-spin" /> : <Icons.refreshCw className="mr-2 h-4 w-4" />}
+                        Actualizar Datos
+                    </Button>
+                    <Button onClick={handleGetRecommendations} disabled={isRecommending || isLoading} variant="outline" className="w-auto flex-grow sm:flex-grow-0 bg-blue-600 hover:bg-blue-700 text-white"> {/* Adjusted width */}
+                        {isRecommending ? <Icons.loader className="mr-2 h-4 w-4 animate-spin" /> : <Icons.wand className="mr-2 h-4 w-4" />}
+                        Recomiéndame
+                    </Button>
+                    <Dialog open={isSearchDialogOpen} onOpenChange={setIsSearchDialogOpen}>
+                        <DialogTrigger asChild>
+                            <Button className="w-auto flex-grow sm:flex-grow-0"> {/* Adjusted width */}
+                                <Icons.plus className="mr-2 h-4 w-4" /> Añadir...
+                            </Button>
+                        </DialogTrigger>
+                        <DialogContent className="sm:max-w-[625px]">
+                            <DialogHeader>
+                                <DialogTitle>Buscar y Añadir Película/Serie</DialogTitle>
+                                <DialogDescription>
+                                    Busca en TMDb y añade elementos a tu lista.
+                                </DialogDescription>
+                            </DialogHeader>
+                            <div className="flex gap-2 my-4">
+                                <Input
+                                    placeholder="Buscar título en TMDb..."
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                    onKeyDown={(e) => e.key === 'Enter' && handleSearchTmdb()}
+                                />
+                                <Button onClick={handleSearchTmdb} disabled={isSearching}>
+                                    {isSearching ? <Icons.loader className="mr-2 h-4 w-4 animate-spin" /> : <Icons.search className="mr-2 h-4 w-4" />}
+                                    Buscar
+                                </Button>
+                            </div>
+                            {searchError && <Alert variant="destructive"><AlertDescription>{searchError}</AlertDescription></Alert>}
+                            <ScrollArea className="h-[400px] mt-4">
+                                {searchResults.length > 0 && (
+                                    <div className="space-y-4">
+                                        {searchResults.map((result) => (
+                                            <Card key={result.id} className="flex items-center p-3 gap-4">
+                                                <img
+                                                    src={result.poster_path ? `https://image.tmdb.org/t/p/w92${result.poster_path}` : "https://placehold.co/92x138/666/fff?text=N/A"}
+                                                    alt={`Poster de ${result.title || result.name}`}
+                                                    className="w-[60px] h-[90px] object-cover rounded-sm flex-shrink-0 bg-muted"
+                                                    onError={(e) => (e.currentTarget.src = "https://placehold.co/92x138/666/fff?text=Error")}
+                                                />
+                                                <div className="flex-grow">
+                                                    <p className="font-semibold">{result.title || result.name}</p>
+                                                    <p className="text-sm text-muted-foreground">
+                                                        {result.media_type === 'movie' ? 'Película' : 'Serie'}
+                                                        {` (${result.release_date?.substring(0, 4) || result.first_air_date?.substring(0, 4) || 'N/A'})`}
+                                                    </p>
+                                                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{result.overview}</p>
+                                                </div>
+                                                <Button
+                                                    size="sm"
+                                                    onClick={() => handleAddItem(result)}
+                                                    disabled={itemList.some(item => item.tmdbId === result.id)}
+                                                >
+                                                    {itemList.some(item => item.tmdbId === result.id) ? <Icons.check className="mr-2 h-4 w-4" /> : <Icons.plus className="mr-2 h-4 w-4" />}
+                                                    {itemList.some(item => item.tmdbId === result.id) ? 'Añadido' : 'Añadir'}
+                                                </Button>
+                                            </Card>
+                                        ))}
+                                    </div>
+                                )}
+                            </ScrollArea>
+                        </DialogContent>
+                    </Dialog>
                 </div>
-
-                 {/* Update Button */}
-                <Button
-                    onClick={handleUpdateItems}
-                    disabled={isUpdatingAll || itemList.filter(i => i.type === 'series').length === 0}
-                    className="w-full"
-                    title={itemList.filter(i => i.type === 'series').length === 0 ? "Añade alguna serie primero" : "Buscar datos en TMDb (solo series)"}
-                >
-                    {isUpdatingAll ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-                    {isUpdatingAll ? 'Actualizando...' : 'Actualizar Datos'}
-                </Button>
             </div>
-        </div>
 
+            {/* --- Item List --- */}
+            {isLoading ? (
+                <div className="flex justify-center items-center h-64">
+                    <Icons.loader className="h-8 w-8 animate-spin text-primary" />
+                </div>
+            ) : filteredAndSortedList.length === 0 ? (
+                <p className="text-center text-muted-foreground mt-10">
+                    {searchTerm ? "No se encontraron elementos que coincidan con tu filtro." : "Tu lista está vacía. ¡Añade alguna película o serie!"}
+                </p>
+            ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                    {filteredAndSortedList.map((item) => (
+                        <Card key={item.tmdbId} className="flex flex-col">
+                            <CardHeader className="p-0 relative">
+                                <img
+                                    src={item.posterPath ? `https://image.tmdb.org/t/p/w342${item.posterPath}` : "https://placehold.co/342x513/666/fff?text=N/A"}
+                                    alt={`Poster de ${item.title}`}
+                                    className="w-full h-auto object-cover rounded-t-lg aspect-[2/3] bg-muted"
+                                    onError={(e) => (e.currentTarget.src = "https://placehold.co/342x513/666/fff?text=Error")}
+                                    loading="lazy"
+                                />
+                                <Badge variant={item.type === 'series' ? 'secondary' : 'outline'} className="absolute top-2 right-2">
+                                    {item.type === 'series' ? 'Serie' : 'Película'}
+                                </Badge>
+                            </CardHeader>
+                            <CardContent className="p-4 flex-grow flex flex-col justify-between">
+                                <div>
+                                    <CardTitle className="text-lg mb-1 line-clamp-2">{item.title}</CardTitle>
+                                    {item.releaseYear && (
+                                        <CardDescription className="text-xs mb-2">{item.releaseYear}</CardDescription>
+                                    )}
+                                    <div className="mb-3">
+                                        <StarRating
+                                            rating={item.rating}
+                                            onRatingChange={(newRating) => handleRatingChange(item.tmdbId, newRating)}
+                                            size={22}
+                                        />
+                                    </div>
+                                </div>
+                                {item.type === 'series' && (
+                                    <div className="mt-auto space-y-2">
+                                        <div className="flex items-center gap-2">
+                                            <label htmlFor={`season-${item.tmdbId}`} className="text-sm font-medium whitespace-nowrap">Tu Temporada:</label>
+                                            <Input
+                                                id={`season-${item.tmdbId}`}
+                                                type="number"
+                                                min="0"
+                                                value={item.userSeason}
+                                                onChange={(e) => handleSeasonChange(item.tmdbId, e.target.value)}
+                                                className="h-8 w-16 text-center"
+                                                placeholder="S"
+                                            />
+                                            <span className="text-sm text-muted-foreground whitespace-nowrap">
+                        {item.latestSeason !== null ? `/ ${item.latestSeason}` : ''}
+                      </span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <label htmlFor={`episode-${item.tmdbId}`} className="text-sm font-medium whitespace-nowrap">Tu Episodio:</label>
+                                            <Input
+                                                id={`episode-${item.tmdbId}`}
+                                                type="number"
+                                                min="0"
+                                                value={item.userEpisode}
+                                                onChange={(e) => handleEpisodeChange(item.tmdbId, e.target.value)}
+                                                className="h-8 w-16 text-center"
+                                                placeholder="E"
+                                            />
+                                        </div>
+                                    </div>
+                                )}
+                            </CardContent>
+                            <CardFooter className="p-3 border-t">
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => handleDeleteItem(item.tmdbId)}
+                                    className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                                    aria-label={`Eliminar ${item.title}`}
+                                >
+                                    <Icons.trash className="h-4 w-4" />
+                                </Button>
+                                <Button variant="ghost" size="icon" asChild className="ml-auto">
+                                    <a
+                                        href={`https://www.themoviedb.org/${item.type === 'series' ? 'tv' : 'movie'}/${item.tmdbId}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        aria-label={`Ver ${item.title} en TMDb`}
+                                    >
+                                        <Icons.externalLink className="h-4 w-4" />
+                                    </a>
+                                </Button>
+                            </CardFooter>
+                        </Card>
+                    ))}
+                </div>
+            )}
 
-        {/* --- Display Item List --- */}
-        <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-          {filteredAndSortedItemList.length === 0 && !isLoadingList && (
-              <p className="col-span-full text-center text-muted-foreground py-10">
-                {searchTerm ? `No se encontraron resultados para "${searchTerm}".` : 'Tu lista está vacía. Usa el botón "+" para añadir películas o series.'}
-              </p>
-          )}
-          {filteredAndSortedItemList.map((item) => (
-              <Card key={item.tmdbId} className={`flex flex-col overflow-hidden transition-opacity duration-300 shadow-md hover:shadow-lg ${item.loadingUpdate ? 'opacity-60 animate-pulse' : ''}`}>
-                {item.loadingUpdate && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-background/70 z-30 rounded-lg">
-                       <Loader2 className="h-6 w-6 animate-spin text-primary" />
+            {/* --- Recommendations Dialog --- */}
+            <Dialog open={isRecommendationsDialogOpen} onOpenChange={setIsRecommendationsDialogOpen}>
+                <DialogContent className="sm:max-w-[425px]">
+                    <DialogHeader>
+                        <DialogTitle>Recomendaciones para ti</DialogTitle>
+                        <DialogDescription>
+                            Basado en tus valoraciones, aquí tienes algunas series que podrían gustarte.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="py-4">
+                        {isRecommending ? (
+                            <div className="flex justify-center items-center h-20">
+                                <Icons.loader className="h-6 w-6 animate-spin text-primary" />
+                            </div>
+                        ) : recommendationError ? (
+                            <Alert variant="destructive">
+                                <AlertTitle>Error</AlertTitle>
+                                <AlertDescription>{recommendationError}</AlertDescription>
+                            </Alert>
+                        ) : recommendations.length > 0 ? (
+                            <ul className="space-y-3">
+                                {recommendations.map((rec, index) => (
+                                    <li key={index} className="border-b pb-2 last:border-b-0">
+                                        <p className="font-semibold">{rec.title}</p>
+                                        {rec.reason && (
+                                            <p className="text-sm text-muted-foreground italic">"{rec.reason}"</p>
+                                        )}
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : (
+                            <p className="text-center text-muted-foreground">No hay recomendaciones disponibles.</p> // Handles empty recommendations array
+                        )}
                     </div>
-                )}
-                 <div className="relative aspect-[2/3] w-full bg-muted">
-                     <img
-                        src={getTmdbImageUrl(item.posterPath, "w342")}
-                        alt={`Poster de ${item.title}`}
-                        className="absolute inset-0 h-full w-full object-cover"
-                        loading="lazy"
-                        onError={(e) => {
-                            console.warn(`Failed to load image for ${item.title}: ${e.currentTarget.src}`);
-                            e.currentTarget.src = 'https://placehold.co/342x513/e2e8f0/718096?text=No+Imagen';
-                            e.currentTarget.onerror = null;
-                        }}
-                     />
-                     <div className="absolute top-2 left-2 bg-black/70 text-white px-2 py-0.5 rounded text-xs font-semibold backdrop-blur-sm z-10 flex items-center">
-                          {item.type === 'movie' ? <Film className="h-3 w-3 mr-1" /> : <Tv className="h-3 w-3 mr-1" />}
-                          {item.type === 'movie' ? 'Película' : 'Serie'} {item.releaseYear ? `(${item.releaseYear})` : ''}
-                     </div>
-                      <Button
-                          variant="destructive"
-                          size="icon"
-                          className="absolute top-1 right-1 h-7 w-7 text-white bg-black/50 hover:bg-red-600 rounded-full z-20 opacity-70 hover:opacity-100 transition-opacity"
-                          onClick={() => deleteItem(item.tmdbId)}
-                          aria-label={`Delete ${item.title}`}
-                      >
-                        <Trash className="h-4 w-4" />
-                      </Button>
-                 </div>
+                    <DialogFooter>
+                        <DialogClose asChild>
+                            <Button type="button" variant="secondary">
+                                Cerrar
+                            </Button>
+                        </DialogClose>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
-                 <div className="p-3 flex flex-col flex-grow">
-                    <CardHeader className="p-0 pb-2">
-                        <CardTitle className="text-sm font-semibold line-clamp-1" title={item.title}>{item.title}</CardTitle>
-                       {item.type === 'series' && (
-                           <CardDescription className="text-xs mt-0.5">
-                             {item.errorUpdate ? (
-                                 <span className="text-red-600 font-semibold">Error: {item.errorUpdate}</span>
-                             ) : (
-                                 <>
-                                   Última Temp (TMDb): <span className="font-semibold text-primary">{item.latestSeason ?? 'N/A'}</span>
-                                 </>
-                             )}
-                          </CardDescription>
-                       )}
-                    </CardHeader>
-                    <CardContent className="p-0 space-y-2 flex-grow flex flex-col justify-between mt-auto"> {/* Adjusted spacing */}
-                        {/* Rating */}
-                       <div className="flex items-center justify-between mt-1">
-                            <Label className="text-xs font-medium">Puntuación:</Label>
-                            <StarRating
-                                rating={item.rating}
-                                onRatingChange={(newRating) => updateRating(item.tmdbId, newRating)}
-                                size={4}
-                            />
-                       </div>
-                       {/* User Season & Episode Input (only for Series) */}
-                       {item.type === 'series' && (
-                           <div className="grid grid-cols-2 gap-2"> {/* Grid for side-by-side */}
-                               <div>
-                                <Label htmlFor={`user-season-${item.tmdbId}`} className="text-xs font-medium block mb-0.5">Tu Temp:</Label>
-                                <Input
-                                    type="number"
-                                    min="0"
-                                    id={`user-season-${item.tmdbId}`}
-                                    value={item.userSeason}
-                                    onChange={(e) => updateUserSeason(item.tmdbId, e.target.value)}
-                                    className="h-8 text-sm"
-                                    placeholder="S"
-                                />
-                              </div>
-                               <div>
-                                <Label htmlFor={`user-episode-${item.tmdbId}`} className="text-xs font-medium block mb-0.5">Tu Ep:</Label>
-                                <Input
-                                    type="number" // Keep as number for simplicity, user can decide meaning
-                                    min="0"
-                                    id={`user-episode-${item.tmdbId}`}
-                                    value={item.userEpisode}
-                                    onChange={(e) => updateUserEpisode(item.tmdbId, e.target.value)} // *** LLAMAR A NUEVA FUNCIÓN ***
-                                    className="h-8 text-sm"
-                                    placeholder="Ep"
-                                />
-                              </div>
-                          </div>
-                       )}
-                       {/* Spacer for movies to align layout */}
-                       {item.type === 'movie' && <div className="h-[56px]"></div>}
-                    </CardContent>
-                 </div>
-              </Card>
-          ))}
         </div>
-
-      </div>
-  );
+    );
 }
+
+// --- Debounce Utility ---
+function debounce<F extends (...args: any[]) => any>(func: F, waitFor: number) {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    return (...args: Parameters<F>): Promise<ReturnType<F>> => {
+        return new Promise((resolve) => {
+            if (timeoutId !== null) {
+                clearTimeout(timeoutId);
+            }
+            timeoutId = setTimeout(() => {
+                timeoutId = null;
+                resolve(func(...args));
+            }, waitFor);
+        });
+    };
+}
+
